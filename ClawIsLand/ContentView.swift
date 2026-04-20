@@ -135,6 +135,7 @@ struct ContentView: View {
     @State private var dnaOffset: Bool = false
     @State private var orbScale: CGFloat = 0.8
     @State private var claudeRotation: Double = 0
+    @State private var currentNotchHeight: CGFloat = 40
     
     // Derived properties for UI bindings
     private var isTaskRunning: Bool {
@@ -258,6 +259,13 @@ struct ContentView: View {
             }
         }
         .frame(width: isExpandedState ? 700 : 320)
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { currentNotchHeight = geo.size.height }
+                    .onChange(of: geo.size.height) { _, h in currentNotchHeight = h }
+            }
+        )
         .animation(.easeInOut(duration: 0.35), value: isExpandedState)
         .animation(.easeInOut(duration: 0.3), value: state.currentPayload != nil)
         .contentShape(NotchShape(topFillet: 8, bottomRadius: 20))
@@ -294,7 +302,7 @@ struct ContentView: View {
                         guard let screen = NSScreen.screens.first else { return false }
                         let screenTop = screen.frame.maxY
                         let contentWidth: CGFloat = isExpandedState ? 700 : 320
-                        let contentHeight: CGFloat = isExpandedState ? 500 : 40
+                        let contentHeight: CGFloat = currentNotchHeight
                         let centerX = screen.frame.midX
                         // The notch visual rect: centered horizontally, hanging from screen top
                         let notchRect = NSRect(

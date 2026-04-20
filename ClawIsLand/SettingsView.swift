@@ -370,6 +370,20 @@ struct GeneralSettingsView: View {
             } footer: {
                 Text("无活动状态时，通知面板将自动收缩回刘海槽的时间。")
             }
+            
+            Section {
+                Button(role: .destructive, action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    HStack {
+                        Spacer()
+                        Text("退出应用 (Quit ClawIsLand)")
+                            .foregroundColor(.red)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
         .formStyle(.grouped)
     }

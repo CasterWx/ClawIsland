@@ -36,16 +36,22 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		53DD1CE12F940C5300A07743 /* ClawIsLand */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ClawIsLand;
 			sourceTree = "<group>";
 		};
 		53DD1CF52F940C5700A07743 /* ClawIsLandTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ClawIsLandTests;
 			sourceTree = "<group>";
 		};
 		53DD1CFF2F940C5700A07743 /* ClawIsLandUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ClawIsLandUITests;
 			sourceTree = "<group>";
 		};
@@ -140,8 +146,6 @@
 				53DD1CF52F940C5700A07743 /* ClawIsLandTests */,
 			);
 			name = ClawIsLandTests;
-			packageProductDependencies = (
-			);
 			productName = ClawIsLandTests;
 			productReference = 53DD1CF22F940C5700A07743 /* ClawIsLandTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -163,8 +167,6 @@
 				53DD1CFF2F940C5700A07743 /* ClawIsLandUITests */,
 			);
 			name = ClawIsLandUITests;
-			packageProductDependencies = (
-			);
 			productName = ClawIsLandUITests;
 			productReference = 53DD1CFC2F940C5700A07743 /* ClawIsLandUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
