@@ -1,0 +1,44 @@
+name: Build and Release
+
+on:
+  release:
+    types: [published]
+
+# Required permissions to upload assets to Github Releases
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Set Script Permissions
+        run: chmod +x package_dmg.sh
+
+      - name: Build ClawIsLand and Create DMG
+        run: |
+          # In local environment, package_dmg.sh uses your certificates.
+          # Here in CI, we bypass Apple code signing so the Github Action can successfully build without developer keys.
+          sed -i '' 's/xcodebuild /xcodebuild CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO /g' package_dmg.sh
+          ./package_dmg.sh
+
+      - name: Compute SHA256 of DMG
+        run: |
+          SHA256=$(shasum -a 256 ClawIsLand.dmg | awk '{print $1}')
+          echo "SHA256=${SHA256}" >> $GITHUB_ENV
+          echo "Built ClawIsLand.dmg with SHA256: ${SHA256}"
+
+      - name: Upload DMG to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ClawIsLand.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
