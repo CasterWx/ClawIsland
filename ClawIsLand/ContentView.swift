@@ -598,19 +598,30 @@ struct PayloadDetailView: View {
 
 struct ActiveSessionsListView: View {
     let sessions: [ActiveSession]
-    
+    var state = SessionState.shared
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             Divider()
                 .background(Color.white.opacity(0.1))
                 .padding(.horizontal, 16)
-            VStack(spacing: 8) {
-                ForEach(sessions) { session in
-                    SessionRowView(session: session)
+
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 8) {
+                    ForEach(sessions) { session in
+                        SessionRowView(session: session)
+
+                        // SubAgent rows directly in the flat list
+                        let subAgents = state.sessionSubAgents[session.sessionId] ?? []
+                        ForEach(subAgents) { agent in
+                            SubAgentRowView(agent: agent, parentCwd: session.cwd)
+                        }
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .frame(maxHeight: 440)
         }
     }
 }
@@ -649,10 +660,10 @@ struct MetricLabel: View {
 struct SessionRowView: View {
     let session: ActiveSession
     var state = SessionState.shared
-    
+
     @State private var isHovered: Bool = false
     @State private var sourceAppName: String? = nil
-    
+
     // Helper to extract 3 turns (user -> assistant)
     private func getRecentTurns(from messages: [SessionMessage], limit: Int = 3) -> [SessionMessage] {
         var userCount = 0
@@ -668,7 +679,7 @@ struct SessionRowView: View {
         }
         return Array(messages[startIndex...])
     }
-    
+
     var body: some View {
         let isDetailExpanded = (state.expandedSessionId == session.sessionId)
         let pathComponents = session.cwd.components(separatedBy: "/")
@@ -676,9 +687,10 @@ struct SessionRowView: View {
         let parent = pathComponents.dropLast().last ?? ""
         let payload = state.sessionPayloads[session.sessionId]
         let msgs = state.sessionMessages[session.sessionId] ?? []
-        
+        let subAgents = state.sessionSubAgents[session.sessionId] ?? []
+
         let uptimeStr = getUptimeString(from: session.startedAt)
-        
+
         let statusMsg: String = {
             if let p = payload {
                 let text = p.prompt ?? p.title ?? p.message ?? p.lastAssistantMessage ?? "Idle / Running in background"
@@ -688,13 +700,15 @@ struct SessionRowView: View {
             }
             return "Idle / Running in background"
         }()
-        
+
         VStack(spacing: 0) {
+            // --- Parent session card (always visible) ---
             VStack(alignment: .leading, spacing: 4) {
+                // Line 1: logo + project name + tags + uptime
                 HStack(spacing: 6) {
                     ClaudeLogo(size: 14)
                         .shadow(color: Color(red: 0.85, green: 0.47, blue: 0.34).opacity(0.8), radius: 2)
-                    
+
                     Button(action: {
                         TerminalActivator.activate(pid: session.pid, cwd: session.cwd)
                     }) {
@@ -703,7 +717,7 @@ struct SessionRowView: View {
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.9))
                                 .lineLimit(1)
-                            
+
                             if let sourceAppName = sourceAppName {
                                 HStack(spacing: 2) {
                                     Text(sourceAppName)
@@ -732,18 +746,20 @@ struct SessionRowView: View {
                             NSCursor.pointingHand.pop()
                         }
                     }
-                        
+
                     Spacer()
-                    
-                    if let m = state.sessionMetrics[session.sessionId] {
-                        HStack(spacing: 4) {
-                            MetricLabel(icon: "arrow.down.circle", text: "I/Token:\(formatTokenString(m.inputTokens))", color: .cyan)
-                            MetricLabel(icon: "arrow.up.circle", text: "O/Token:\(formatTokenString(m.outputTokens))", color: .orange)
-                            MetricLabel(icon: "hammer.fill", text: "TLS:\(m.toolCalls)", color: .purple)
-                            MetricLabel(icon: "arrow.2.squarepath", text: "Turns:\(msgs.filter({ $0.role == "user" }).count)", color: .blue)
-                        }
+
+                    if !subAgents.isEmpty {
+                        Text("\(subAgents.count) sub")
+                            .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.25))
+                            .foregroundColor(.orange)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.orange.opacity(0.6), lineWidth: 1))
+                            .cornerRadius(3)
                     }
-                        
+
                     if let ep = session.entrypoint {
                         let isCLI = ep.lowercased().contains("cli")
                         Text(isCLI ? "CLI" : "SDK")
@@ -755,18 +771,31 @@ struct SessionRowView: View {
                             .overlay(RoundedRectangle(cornerRadius: 3).stroke(isCLI ? Color.purple.opacity(0.8) : Color.blue.opacity(0.8), lineWidth: 1))
                             .cornerRadius(3)
                     }
-                    
+
                     Text(uptimeStr)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.white.opacity(0.5))
                 }
-                
+
+                // Line 2: metrics badges
+                HStack(spacing: 4) {
+                    if let m = state.sessionMetrics[session.sessionId] {
+                        MetricLabel(icon: "arrow.down.circle", text: "I:\(formatTokenString(m.inputTokens))", color: .cyan)
+                        MetricLabel(icon: "arrow.up.circle", text: "O:\(formatTokenString(m.outputTokens))", color: .orange)
+                        MetricLabel(icon: "hammer.fill", text: "TLS:\(m.toolCalls)", color: .purple)
+                        MetricLabel(icon: "arrow.2.squarepath", text: "Turns:\(msgs.filter({ $0.role == "user" }).count)", color: .blue)
+                    }
+                    Spacer()
+                }
+                .padding(.leading, 14)
+
+                // Line 3: status message
                 HStack(alignment: .top, spacing: 6) {
                     Text("▶︎")
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.3))
                         .padding(.top, 1)
-                    
+
                     Text(statusMsg)
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.7))
@@ -777,13 +806,14 @@ struct SessionRowView: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 16)
-            
+
+            // --- Expanded: parent session message history ---
             let hasFinalPayload = (payload?.hookEventName == "Stop" && !(payload?.lastAssistantMessage ?? "").isEmpty) || (payload?.hookEventName == "Error" && !(payload?.prompt ?? "").isEmpty)
-            
+
             if isDetailExpanded && (!msgs.isEmpty || hasFinalPayload) {
                 VStack(alignment: .leading, spacing: 8) {
                     let filteredMsgs = getRecentTurns(from: msgs, limit: 3)
-                    
+
                     if msgs.count > filteredMsgs.count {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -797,13 +827,13 @@ struct SessionRowView: View {
                         .padding(.bottom, 4)
                         .padding(.top, 4)
                     }
-                    
+
                     DynamicHeightScrollView(maxHeight: 350) {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(filteredMsgs) { msg in
                                 ChatMessageBubble(msg: msg)
                             }
-                            
+
                             FinalHookBubble(payload: payload, filteredMsgs: filteredMsgs)
                         }
                         .padding(.vertical, 8)
@@ -832,6 +862,7 @@ struct SessionRowView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 if state.expandedSessionId == session.sessionId {
                     state.expandedSessionId = nil
+                    state.expandedSubAgentId = nil
                 } else {
                     state.expandedSessionId = session.sessionId
                 }
@@ -848,7 +879,7 @@ struct SessionRowView: View {
             }
         }
     }
-    
+
     // Helper to calculate uptime
     private func getUptimeString(from startedAt: Int) -> String {
         let epochMs = TimeInterval(startedAt)
@@ -885,6 +916,152 @@ struct ChatMessageBubble: View {
             }
         }
         .padding(.horizontal, 14)
+    }
+}
+
+struct SubAgentRowView: View {
+    let agent: SubAgent
+    let parentCwd: String
+    var state = SessionState.shared
+
+    @State private var isHovered: Bool = false
+
+    private func getRecentTurns(from messages: [SessionMessage], limit: Int = 3) -> [SessionMessage] {
+        var userCount = 0
+        var startIndex = 0
+        for i in stride(from: messages.count - 1, through: 0, by: -1) {
+            if messages[i].role == "user" {
+                userCount += 1
+                if userCount >= limit {
+                    startIndex = i
+                    break
+                }
+            }
+        }
+        return Array(messages[startIndex...])
+    }
+
+    var body: some View {
+        let msgs = state.subAgentMessages[agent.agentId] ?? []
+        let metrics = state.subAgentMetrics[agent.agentId]
+        let isExpanded = state.expandedSubAgentId == agent.agentId
+
+        let statusMsg: String = state.sessionHistories["sub_\(agent.agentId)"] ?? "Running..."
+
+        VStack(spacing: 0) {
+            // Card — compact two-line layout
+            VStack(alignment: .leading, spacing: 2) {
+                // Line 1: pixel mascot + agentType + description + sub badge + metrics
+                HStack(spacing: 5) {
+                    MascotView(source: "ambientCore", status: .processing, size: 14)
+                        .frame(width: 14, height: 14)
+
+                    Text(agent.agentType)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(1)
+
+                    Text("·")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.2))
+
+                    Text(agent.description)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.5))
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if let m = metrics {
+                        HStack(spacing: 3) {
+                            MetricLabel(icon: "arrow.down.circle", text: formatTokenString(m.inputTokens), color: .cyan)
+                            MetricLabel(icon: "arrow.up.circle", text: formatTokenString(m.outputTokens), color: .orange)
+                            MetricLabel(icon: "hammer.fill", text: "\(m.toolCalls)", color: .purple)
+                        }
+                    }
+
+                    Text("sub")
+                        .font(.system(size: 7, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.25))
+                        .foregroundColor(.orange)
+                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.orange.opacity(0.6), lineWidth: 1))
+                        .cornerRadius(2)
+                }
+
+                // Line 2: status message
+                HStack(alignment: .top, spacing: 4) {
+                    Text("▶︎")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.25))
+                        .padding(.top, 1)
+
+                    Text(statusMsg)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(.leading, 12)
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 16)
+
+            // Expanded messages
+            if isExpanded && !msgs.isEmpty {
+                let filteredMsgs = getRecentTurns(from: msgs, limit: 2)
+
+                if msgs.count > filteredMsgs.count {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 9))
+                        Text("仅渲染最近 2 轮交互。")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.orange.opacity(0.8))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 4)
+                }
+
+                DynamicHeightScrollView(maxHeight: 250) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(filteredMsgs) { msg in
+                            ChatMessageBubble(msg: msg)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.5))
+            }
+        }
+        .padding(.leading, 24)  // left indent to show parent-child relationship
+        .background(isHovered ? Color.white.opacity(0.15) : Color.black.opacity(0.4))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.white.opacity(0.05)),
+            alignment: .bottom
+        )
+        .contentShape(Rectangle())
+        .onHover { hit in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hit
+            }
+        }
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                if state.expandedSubAgentId == agent.agentId {
+                    state.expandedSubAgentId = nil
+                } else {
+                    state.expandedSubAgentId = agent.agentId
+                }
+            }
+        }
     }
 }
 

@@ -86,6 +86,15 @@ struct SessionMessage: Identifiable, Codable {
     let content: String
 }
 
+struct SubAgent: Identifiable {
+    var id: String { agentId }
+    let agentId: String
+    let agentType: String
+    let description: String
+    let sessionId: String   // parent session ID
+    let cwd: String         // parent session cwd (for building .jsonl path)
+}
+
 @Observable
 class SessionState {
     static let shared = SessionState()
@@ -95,20 +104,25 @@ class SessionState {
     var sessionHistories: [String: String] = [:]
     var sessionMetrics: [String: SessionMetrics] = [:]
     var sessionMessages: [String: [SessionMessage]] = [:]
-    
+    var sessionSubAgents: [String: [SubAgent]] = [:]
+    var subAgentMessages: [String: [SessionMessage]] = [:]
+    var subAgentMetrics: [String: SessionMetrics] = [:]
+
     var isExpanded: Bool = false
     var expandedSessionId: String? = nil
+    var expandedSubAgentId: String? = nil
     var statusText: String = "Monitoring..."
     var socketConnection: FileHandle?
     var activeProcessCount: Int = 0
     var activeSessions: [ActiveSession] = []
     
     private var processTimer: Timer?
-    
+    private var isCheckingProcesses = false
+
     init() {
         startProcessMonitoring()
     }
-    
+
     func startProcessMonitoring() {
         processTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
             self?.checkClaudeProcesses()
@@ -197,23 +211,142 @@ class SessionState {
         return result
     }
     
+    private func fetchSubAgents(cwd: String, sessionId: String) -> [SubAgent] {
+        let dashedCwd = cwd.replacingOccurrences(of: "[^a-zA-Z0-9-]", with: "-", options: .regularExpression)
+        let fileManager = FileManager.default
+        let homeDir = fileManager.homeDirectoryForCurrentUser
+        let subagentsURL = homeDir.appendingPathComponent(".claude/projects/\(dashedCwd)/\(sessionId)/subagents")
+
+        guard let contents = try? fileManager.contentsOfDirectory(at: subagentsURL, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        var agents: [SubAgent] = []
+        let metaFiles = contents.filter { $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("agent-") }
+
+        for metaURL in metaFiles {
+            guard let data = try? Data(contentsOf: metaURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let agentType = json["agentType"] as? String,
+                  let desc = json["description"] as? String else { continue }
+
+            // Extract agentId from filename: agent-{agentId}.meta.json
+            let filename = metaURL.deletingPathExtension().lastPathComponent // agent-{agentId}.meta
+            let metaSuffix = ".meta"
+            let agentFileName: String
+            if filename.hasSuffix(metaSuffix) {
+                agentFileName = String(filename.dropLast(metaSuffix.count)) // agent-{agentId}
+            } else {
+                agentFileName = filename
+            }
+            let agentId = String(agentFileName.dropFirst("agent-".count))
+
+            agents.append(SubAgent(
+                agentId: agentId,
+                agentType: agentType,
+                description: desc,
+                sessionId: sessionId,
+                cwd: cwd
+            ))
+        }
+
+        return agents
+    }
+
+    private func fetchSubAgentHistory(cwd: String, sessionId: String, agentId: String) -> (String?, SessionMetrics, [SessionMessage]) {
+        let dashedCwd = cwd.replacingOccurrences(of: "[^a-zA-Z0-9-]", with: "-", options: .regularExpression)
+        let fileManager = FileManager.default
+        let homeDir = fileManager.homeDirectoryForCurrentUser
+        let jsonlURL = homeDir.appendingPathComponent(".claude/projects/\(dashedCwd)/\(sessionId)/subagents/agent-\(agentId).jsonl")
+
+        let path = jsonlURL.path
+        if let attrs = try? fileManager.attributesOfItem(atPath: path),
+           let currentSize = attrs[.size] as? UInt64 {
+            let cacheKey = "sub_\(agentId)"
+            if let lastSize = lastFileSizes[cacheKey], lastSize == currentSize, let cached = cachedHistoryData[cacheKey] {
+                return cached
+            }
+            lastFileSizes[cacheKey] = currentSize
+        } else {
+            return (nil, SessionMetrics(), [])
+        }
+
+        var metrics = SessionMetrics()
+        var lastStatus: String? = nil
+        var messages: [SessionMessage] = []
+
+        guard let data = try? Data(contentsOf: jsonlURL),
+              let content = String(data: data, encoding: .utf8) else { return (nil, metrics, []) }
+
+        var startIndex = content.startIndex
+        var lines: [Substring] = []
+        while startIndex < content.endIndex {
+            let nextNewLine = content[startIndex...].firstIndex(of: "\n") ?? content.endIndex
+            lines.append(content[startIndex..<nextNewLine])
+            if nextNewLine == content.endIndex { break }
+            startIndex = content.index(after: nextNewLine)
+        }
+
+        metrics.msgCount = lines.count
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+
+            if let dict = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8), options: []) as? [String: Any],
+               let type = dict["type"] as? String {
+
+                if type == "user", let msg = dict["message"] as? [String: Any], let txt = msg["content"] as? String {
+                    lastStatus = "🗣 \(txt.count > 100 ? String(txt.prefix(100)) + "..." : txt)"
+                    messages.append(SessionMessage(role: "user", content: txt))
+                }
+
+                if type == "assistant", let msg = dict["message"] as? [String: Any] {
+                    if let contentArray = msg["content"] as? [[String: Any]] {
+                        if let firstText = contentArray.first(where: { ($0["type"] as? String) == "text" })?["text"] as? String {
+                            lastStatus = "🤖 \(firstText.count > 100 ? String(firstText.prefix(100)) + "..." : firstText)"
+                            messages.append(SessionMessage(role: "assistant", content: firstText))
+                        }
+                        for c in contentArray {
+                            if (c["type"] as? String) == "tool_use" {
+                                metrics.toolCalls += 1
+                            }
+                        }
+                    }
+                    if let usage = msg["usage"] as? [String: Any] {
+                        metrics.inputTokens += (usage["input_tokens"] as? Int) ?? 0
+                        metrics.outputTokens += (usage["output_tokens"] as? Int) ?? 0
+                    }
+                }
+            }
+        }
+
+        let result = (lastStatus, metrics, Array(messages.suffix(30)))
+        let cacheKey = "sub_\(agentId)"
+        cachedHistoryData[cacheKey] = result
+        return result
+    }
+
     private func checkClaudeProcesses() {
+        guard !isCheckingProcesses else { return }
+        isCheckingProcesses = true
+
         DispatchQueue.global(qos: .background).async {
             let fileManager = FileManager.default
             let homeDir = fileManager.homeDirectoryForCurrentUser
             let sessionsURL = homeDir.appendingPathComponent(".claude/sessions")
-            
+
             do {
                 let fileURLs = try fileManager.contentsOfDirectory(at: sessionsURL, includingPropertiesForKeys: nil)
                 let jsonFiles = fileURLs.filter { $0.pathExtension == "json" }
-                
+
                 var validSessions: [ActiveSession] = []
                 let decoder = JSONDecoder()
-                
+
                 for fileURL in jsonFiles {
                     if let data = try? Data(contentsOf: fileURL),
                        let session = try? decoder.decode(ActiveSession.self, from: data) {
-                        
+
                         let isRunning = kill(pid_t(session.pid), 0) == 0
                         if isRunning {
                             validSessions.append(session)
@@ -227,28 +360,14 @@ class SessionState {
                         }
                     }
                 }
-                
+
                 validSessions.sort { $0.startedAt > $1.startedAt }
-                
-                var tempHistories: [String: String] = [:]
-                var tempMetrics: [String: SessionMetrics] = [:]
-                var tempMessages: [String: [SessionMessage]] = [:]
-                for session in validSessions {
-                    let (hist, met, msgs) = self.fetchHistoryAndMetrics(cwd: session.cwd, sessionId: session.sessionId)
-                    if let h = hist {
-                        tempHistories[session.sessionId] = h
-                    }
-                    tempMetrics[session.sessionId] = met
-                    tempMessages[session.sessionId] = msgs
-                }
-                
+
+                // Phase 1: Show session list immediately with basic info
                 DispatchQueue.main.async {
                     self.activeSessions = validSessions
                     self.activeProcessCount = validSessions.count
-                    self.sessionHistories = tempHistories
-                    self.sessionMetrics = tempMetrics
-                    self.sessionMessages = tempMessages
-                    
+
                     if self.currentPayload == nil {
                         if validSessions.count > 0 {
                             let lastCwd = validSessions.first?.cwd.components(separatedBy: "/").last ?? "Unknown"
@@ -258,8 +377,39 @@ class SessionState {
                         }
                     }
                 }
+
+                // Phase 2: Load history per session, dispatch incrementally
+                for session in validSessions {
+                    let (hist, met, msgs) = self.fetchHistoryAndMetrics(cwd: session.cwd, sessionId: session.sessionId)
+
+                    let subAgents = self.fetchSubAgents(cwd: session.cwd, sessionId: session.sessionId)
+                    var subHistories: [String: String] = [:]
+                    var subMet: [String: SessionMetrics] = [:]
+                    var subMsgs: [String: [SessionMessage]] = [:]
+                    for sa in subAgents {
+                        let (saHist, saMet, saMsgs) = self.fetchSubAgentHistory(cwd: sa.cwd, sessionId: sa.sessionId, agentId: sa.agentId)
+                        subMet[sa.agentId] = saMet
+                        if !saMsgs.isEmpty { subMsgs[sa.agentId] = saMsgs }
+                        if let h = saHist { subHistories["sub_\(sa.agentId)"] = h }
+                    }
+
+                    DispatchQueue.main.async {
+                        if let h = hist { self.sessionHistories[session.sessionId] = h }
+                        self.sessionMetrics[session.sessionId] = met
+                        self.sessionMessages[session.sessionId] = msgs
+                        if !subAgents.isEmpty { self.sessionSubAgents[session.sessionId] = subAgents }
+                        for (k, v) in subHistories { self.sessionHistories[k] = v }
+                        for (k, v) in subMet { self.subAgentMetrics[k] = v }
+                        for (k, v) in subMsgs { self.subAgentMessages[k] = v }
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    self.isCheckingProcesses = false
+                }
             } catch {
                 DispatchQueue.main.async {
+                    self.isCheckingProcesses = false
                     self.activeSessions = []
                     self.activeProcessCount = 0
                     if self.currentPayload == nil { self.statusText = "Idle" }
