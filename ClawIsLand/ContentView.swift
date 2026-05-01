@@ -897,21 +897,21 @@ struct ChatMessageBubble: View {
                 Spacer()
                 Text(msg.content.count > 1000 ? String(msg.content.prefix(1000)) + "\n\n... [内容过长，自动截断防卡顿]" : msg.content)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(.white)
+                    .foregroundColor(.white.opacity(0.95))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(LinearGradient(gradient: Gradient(colors: [Color.pink.opacity(0.6), Color.purple.opacity(0.6)]), startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .background(LinearGradient(gradient: Gradient(colors: [Color.indigo.opacity(0.45), Color.blue.opacity(0.4)]), startPoint: .topLeading, endPoint: .bottomTrailing))
                     .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.pink.opacity(0.8), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.indigo.opacity(0.4), lineWidth: 1))
             } else {
                 Markdown(msg.content)
                     .markdownTheme(.clawTheme(baseColor: .cyan.opacity(0.9)))
                     .font(.system(size: 11, weight: .regular, design: .rounded))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(Color.cyan.opacity(0.15))
+                    .background(Color.cyan.opacity(0.12))
                     .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cyan.opacity(0.5), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cyan.opacity(0.35), lineWidth: 1))
                 Spacer()
             }
         }
@@ -1089,13 +1089,13 @@ struct FinalHookBubble: View {
             if !(filteredMsgs.last?.content.contains(txt) ?? false) {
                 HStack {
                     Markdown(txt)
-                        .markdownTheme(.clawTheme(baseColor: .red.opacity(0.9)))
+                        .markdownTheme(.clawTheme(baseColor: .orange.opacity(0.9)))
                         .font(.system(size: 11, weight: .regular, design: .rounded))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.15))
+                        .background(Color.orange.opacity(0.1))
                         .cornerRadius(12)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.red.opacity(0.5), lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.3), lineWidth: 1))
                     Spacer()
                 }
                 .padding(.horizontal, 14)
