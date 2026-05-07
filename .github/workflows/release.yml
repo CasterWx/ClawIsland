@@ -1,18 +1,35 @@
-name: Build and Release
+name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: "Sign & notarize the macOS binary (requires Apple Developer secrets)"
+        type: boolean
+        default: false
+      version:
+        description: "Version override (leave empty to use MARKETING_VERSION from project)"
+        type: string
+        required: false
   release:
     types: [published]
 
-# Required permissions to upload assets to Github Releases
 permissions:
   contents: write
 
+concurrency:
+  group: clawisland-release-${{ github.run_id }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-release:
+  build:
+    name: Build & package macOS
     runs-on: macos-latest
+    outputs:
+      version: ${{ steps.package.outputs.VERSION }}
+      dmg: ${{ steps.package.outputs.DMG }}
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Xcode
@@ -20,25 +37,136 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Set Script Permissions
-        run: chmod +x package_dmg.sh
-
-      - name: Build ClawIsLand and Create DMG
-        run: |
-          # In local environment, package_dmg.sh uses your certificates.
-          # Here in CI, we bypass Apple code signing so the Github Action can successfully build without developer keys.
-          sed -i '' 's/xcodebuild /xcodebuild CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO /g' package_dmg.sh
-          ./package_dmg.sh
-
-      - name: Compute SHA256 of DMG
-        run: |
-          SHA256=$(shasum -a 256 ClawIsLand.dmg | awk '{print $1}')
-          echo "SHA256=${SHA256}" >> $GITHUB_ENV
-          echo "Built ClawIsLand.dmg with SHA256: ${SHA256}"
-
-      - name: Upload DMG to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ClawIsLand.dmg
+      - name: Setup Apple code signing
+        id: signing
+        if: >-
+          ${{
+            (github.event_name == 'release') ||
+            (github.event_name == 'workflow_dispatch' && inputs.signed)
+          }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_BASE64 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$APPLE_SIGNING_CERTIFICATE_BASE64" ]; then
+            echo "APPLE_SIGNING_CERTIFICATE_BASE64 secret is not set — skipping signing" >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/clawisland.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -l "$KEYCHAIN_PATH"
+
+          CERT_PATH="$RUNNER_TEMP/clawisland-signing.p12"
+          printf '%s' "$APPLE_SIGNING_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
+
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/pkgbuild
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -oE '"[^"]+"' | head -1 | tr -d '"')
+          if [ -z "$IDENTITY" ]; then
+            echo "No code signing identity found in imported certificate" >&2
+            exit 1
+          fi
+
+          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Override version
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
+        run: |
+          echo "Overriding MARKETING_VERSION to ${{ inputs.version }}"
+          sed -i '' "s/MARKETING_VERSION = .*/MARKETING_VERSION = ${{ inputs.version }};/g" ClawIsLand.xcodeproj/project.pbxproj
+
+      - name: Build & package
+        id: package
+        env:
+          NOTARIZE: ${{ steps.signing.outputs.skip == 'false' && 'true' || 'false' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: ./package_dmg.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawisland-release-assets
+          path: |
+            ${{ steps.package.outputs.DMG }}
+            ${{ steps.package.outputs.DMG }}.sha256
+
+  publish:
+    name: Publish release
+    needs: build
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: clawisland-release-assets
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DMG: ${{ needs.build.outputs.dmg }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+
+          TAG="v${VERSION}"
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
+            echo "Uploading assets to existing release $TAG..."
+            gh release upload "$TAG" "$DMG" "${DMG}.sha256" --clobber
+          else
+            echo "Creating release $TAG..."
+            if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "Tag $TAG already exists on origin — force updating..."
+              git tag -f "$TAG" "$GITHUB_SHA"
+              git push origin "refs/tags/$TAG" --force
+            else
+              git tag "$TAG" "$GITHUB_SHA"
+              git push origin "refs/tags/$TAG"
+            fi
+
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$DMG" "${DMG}.sha256" --clobber
+            else
+              gh release create "$TAG" \
+                --target "$GITHUB_SHA" \
+                --title "ClawIsLand $VERSION" \
+                --generate-notes \
+                "$DMG" "${DMG}.sha256"
+            fi
+          fi
+
+          echo "### Release $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "- DMG: $DMG" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA256: $(cat "${DMG}.sha256")" >> "$GITHUB_STEP_SUMMARY"
