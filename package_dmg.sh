@@ -11,7 +11,7 @@ BUILD_ARGS=(-project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION
 
 # Allow signing to be controlled via env
 if [ -n "${CODE_SIGN_IDENTITY:-}" ]; then
-	BUILD_ARGS+=("CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" "CODE_SIGN_STYLE=Manual" "PROVISIONING_PROFILE_SPECIFIER=")
+	BUILD_ARGS+=("CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" "CODE_SIGN_STYLE=Manual" "PROVISIONING_PROFILE_SPECIFIER=" "OTHER_CODE_SIGN_FLAGS=--options=runtime")
 fi
 if [ -n "${DEVELOPMENT_TEAM:-}" ]; then
 	BUILD_ARGS+=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
@@ -54,15 +54,43 @@ if [ "${NOTARIZE:-false}" = "true" ]; then
 		echo "NOTARIZE=true but APPLE_ID, APPLE_TEAM_ID, or APPLE_APP_SPECIFIC_PASSWORD not set" >&2
 		exit 1
 	fi
+
 	echo "Submitting DMG for notarization..."
-	xcrun notarytool submit "$DMG_NAME" \
+
+	# notarytool submit exits 0 even on Invalid status, so we capture the
+	# submission ID from stdout and explicitly check the result with log.
+	SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_NAME" \
 		--apple-id "$APPLE_ID" \
 		--team-id "$APPLE_TEAM_ID" \
 		--password "$APPLE_APP_SPECIFIC_PASSWORD" \
-		--wait
-	echo "Stapling notarization ticket..."
-	xcrun stapler staple "$DMG_NAME"
-	echo "Notarization complete."
+		--wait 2>&1)
+	echo "$SUBMIT_OUTPUT"
+
+	SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $NF}')
+	if [ -z "$SUBMISSION_ID" ]; then
+		echo "Could not extract notarization submission ID" >&2
+		exit 1
+	fi
+
+	NOTARY_STATUS=$(xcrun notarytool info "$SUBMISSION_ID" \
+		--apple-id "$APPLE_ID" \
+		--team-id "$APPLE_TEAM_ID" \
+		--password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1)
+
+	echo "$NOTARY_STATUS"
+
+	if echo "$NOTARY_STATUS" | grep -q 'status: Accepted'; then
+		echo "Stapling notarization ticket..."
+		xcrun stapler staple "$DMG_NAME"
+		echo "Notarization complete."
+	else
+		echo "Notarization failed. Fetching detailed log..." >&2
+		xcrun notarytool log "$SUBMISSION_ID" \
+			--apple-id "$APPLE_ID" \
+			--team-id "$APPLE_TEAM_ID" \
+			--password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1
+		exit 1
+	fi
 fi
 
 # SHA256 checksum
