@@ -7,7 +7,7 @@ CONFIGURATION="${CONFIGURATION:-Release}"
 
 echo "Building $SCHEME ($CONFIGURATION)..."
 
-BUILD_ARGS=(-project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION)
+BUILD_ARGS=(-project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION")
 
 # Allow signing to be controlled via env
 if [ -n "${CODE_SIGN_IDENTITY:-}" ]; then
