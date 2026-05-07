@@ -33,23 +33,6 @@ fi
 
 echo "Built $SCHEME $VERSION at $APP_PATH"
 
-# Optional notarization (for CI)
-if [ "${NOTARIZE:-false}" = "true" ]; then
-	if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
-		echo "NOTARIZE=true but APPLE_ID, APPLE_TEAM_ID, or APPLE_APP_SPECIFIC_PASSWORD not set" >&2
-		exit 1
-	fi
-	echo "Submitting for notarization..."
-	xcrun notarytool submit "$APP_PATH" \
-		--apple-id "$APPLE_ID" \
-		--team-id "$APPLE_TEAM_ID" \
-		--password "$APPLE_APP_SPECIFIC_PASSWORD" \
-		--wait
-	echo "Stapling notarization ticket..."
-	xcrun stapler staple "$APP_PATH"
-	echo "Notarization complete."
-fi
-
 # Create DMG
 ARCH="${ARCH:-arm64}"
 DMG_NAME="ClawIsLand-${VERSION}-mac-${ARCH}.dmg"
@@ -64,6 +47,23 @@ ln -s /Applications "$STAGING_DIR/Applications"
 rm -f "$DMG_NAME"
 hdiutil create -volname "$SCHEME" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_NAME"
 rm -rf "$STAGING_DIR"
+
+# Optional notarization — runs against the DMG
+if [ "${NOTARIZE:-false}" = "true" ]; then
+	if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
+		echo "NOTARIZE=true but APPLE_ID, APPLE_TEAM_ID, or APPLE_APP_SPECIFIC_PASSWORD not set" >&2
+		exit 1
+	fi
+	echo "Submitting DMG for notarization..."
+	xcrun notarytool submit "$DMG_NAME" \
+		--apple-id "$APPLE_ID" \
+		--team-id "$APPLE_TEAM_ID" \
+		--password "$APPLE_APP_SPECIFIC_PASSWORD" \
+		--wait
+	echo "Stapling notarization ticket..."
+	xcrun stapler staple "$DMG_NAME"
+	echo "Notarization complete."
+fi
 
 # SHA256 checksum
 shasum -a 256 "$DMG_NAME" | awk '{print $1 "  " $2}' > "${DMG_NAME}.sha256"
