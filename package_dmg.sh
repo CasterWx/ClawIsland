@@ -33,6 +33,18 @@ fi
 
 echo "Built $SCHEME $VERSION at $APP_PATH"
 
+# Re-sign for notarization compliance (secure timestamp + purge get-task-allow)
+if [ -n "${CODE_SIGN_IDENTITY:-}" ]; then
+	ENTITLEMENTS_PATH="ClawIsLand/ClawIsLand.entitlements"
+	echo "Re-signing with notarization-compliant flags..."
+	codesign --force --deep --sign "$CODE_SIGN_IDENTITY" \
+		--options runtime \
+		--timestamp \
+		--entitlements "$ENTITLEMENTS_PATH" \
+		"$APP_PATH"
+	echo "Re-sign complete."
+fi
+
 # Create DMG
 ARCH="${ARCH:-arm64}"
 DMG_NAME="ClawIsLand-${VERSION}-mac-${ARCH}.dmg"
