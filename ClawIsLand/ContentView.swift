@@ -374,13 +374,23 @@ struct ContentView: View {
 struct PayloadDetailView: View {
     let payload: HookPayload
     var state: SessionState
-    
+    @State private var dismissHovered: Bool = false
+
+    private func dismissPopup() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            state.isExpanded = false
+            state.currentPayload = nil
+            state.socketConnection = nil
+            state.statusText = "Dismissed"
+        }
+    }
+
     var body: some View {
         let cwdName = (payload.cwd ?? "").components(separatedBy: "/").last ?? ""
         let message = payload.prompt ?? payload.title ?? payload.message ?? payload.lastAssistantMessage ?? state.statusText
-        
+
         VStack(alignment: .leading, spacing: 0) {
-            
+
             if payload.hookEventName == "PermissionRequest" {
                 if payload.toolName == "AskUserQuestion", let questions = payload.toolInput?.questions, let primaryQuestion = questions.first {
                     VStack(alignment: .leading, spacing: 12) {
@@ -394,6 +404,32 @@ struct PayloadDetailView: View {
                                     .foregroundColor(.blue)
                             }
                             Text("Agent 提问: \(primaryQuestion.header ?? "需要您的决定")")
+
+                            Spacer()
+
+                            Button(action: dismissPopup) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 10, weight: .bold))
+                                    if dismissHovered {
+                                        Text("关闭弹窗")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .transition(.opacity)
+                                    }
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, dismissHovered ? 8 : 0)
+                                .frame(minWidth: 20, minHeight: 20)
+                                .background(Color.red.opacity(0.6))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(.plain)
+                            .animation(.easeInOut(duration: 0.15), value: dismissHovered)
+                            .onHover { hovering in
+                                dismissHovered = hovering
+                                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pointingHand.pop() }
+                            }
+                            .help("关闭弹窗")
                         }
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.7))
@@ -466,6 +502,32 @@ struct PayloadDetailView: View {
                                     .foregroundColor(.orange)
                             }
                             Text("高危权限请求: \(payload.toolName ?? "Tool")")
+
+                            Spacer()
+
+                            Button(action: dismissPopup) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 10, weight: .bold))
+                                    if dismissHovered {
+                                        Text("关闭弹窗")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .transition(.opacity)
+                                    }
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, dismissHovered ? 8 : 0)
+                                .frame(minWidth: 20, minHeight: 20)
+                                .background(Color.red.opacity(0.6))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(.plain)
+                            .animation(.easeInOut(duration: 0.15), value: dismissHovered)
+                            .onHover { hovering in
+                                dismissHovered = hovering
+                                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pointingHand.pop() }
+                            }
+                            .help("关闭弹窗")
                         }
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.7))
@@ -663,6 +725,7 @@ struct SessionRowView: View {
 
     @State private var isHovered: Bool = false
     @State private var sourceAppName: String? = nil
+    @State private var jumpButtonHovered: Bool = false
 
     // Helper to extract 3 turns (user -> assistant)
     private func getRecentTurns(from messages: [SessionMessage], limit: Int = 3) -> [SessionMessage] {
@@ -709,42 +772,19 @@ struct SessionRowView: View {
                     ClaudeLogo(size: 14)
                         .shadow(color: Color(red: 0.85, green: 0.47, blue: 0.34).opacity(0.8), radius: 2)
 
-                    Button(action: {
-                        TerminalActivator.activate(pid: session.pid, cwd: session.cwd)
-                    }) {
-                        HStack(spacing: 4) {
-                            Text("[ \(!parent.isEmpty && parent != NSUserName() ? "\(parent)/" : "")\(name) ]")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.9))
-                                .lineLimit(1)
+                    Text("[ \(!parent.isEmpty && parent != NSUserName() ? "\(parent)/" : "")\(name) ]")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineLimit(1)
 
-                            if let sourceAppName = sourceAppName {
-                                HStack(spacing: 2) {
-                                    Text(sourceAppName)
-                                    Image(systemName: "arrow.up.forward.app")
-                                        .font(.system(size: 9))
-                                }
-                                .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.white.opacity(0.15))
-                                .cornerRadius(4)
-                                .foregroundColor(.white.opacity(0.8))
-                            } else {
-                                Image(systemName: "arrow.up.forward.app")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.5))
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { hit in
-                        if hit {
-                            NSCursor.pointingHand.push()
-                        } else {
-                            NSCursor.pointingHand.pop()
-                        }
+                    if let sourceAppName = sourceAppName {
+                        Text(sourceAppName)
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(4)
+                            .foregroundColor(.white.opacity(0.6))
                     }
 
                     Spacer()
@@ -775,6 +815,32 @@ struct SessionRowView: View {
                     Text(uptimeStr)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.white.opacity(0.5))
+
+                    Button(action: {
+                        TerminalActivator.activate(pid: session.pid, cwd: session.cwd)
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.forward.app")
+                                .font(.system(size: 12, weight: .semibold))
+                            if jumpButtonHovered {
+                                Text("跳转终端")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .transition(.opacity)
+                            }
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, jumpButtonHovered ? 8 : 0)
+                        .frame(minWidth: 24, minHeight: 24)
+                        .background(Color.blue.opacity(0.6))
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    .animation(.easeInOut(duration: 0.15), value: jumpButtonHovered)
+                    .onHover { hovering in
+                        jumpButtonHovered = hovering
+                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pointingHand.pop() }
+                    }
+                    .help("跳转到 \(sourceAppName ?? "终端")")
                 }
 
                 // Line 2: metrics badges

@@ -33,6 +33,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ignore SIGPIPE to prevent crash when writing to a closed socket
+        signal(SIGPIPE, SIG_IGN)
+
         // App will not show in dock
         NSApp.setActivationPolicy(.accessory)
         

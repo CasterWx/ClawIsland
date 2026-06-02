@@ -425,13 +425,27 @@ class SessionState {
         if let eventName = payload.hookEventName {
             self.latestSoundTrigger = (eventName, UUID())
         }
-        
+
+        // Auto-dismiss stale PermissionRequest only when a session-advancing event arrives,
+        // indicating the user already responded in the terminal.
+        let sessionAdvancingEvents = ["UserPromptSubmit", "Stop", "SessionEnd"]
+        if let currentEvent = self.currentPayload?.hookEventName,
+           currentEvent == "PermissionRequest",
+           let newEvent = payload.hookEventName,
+           sessionAdvancingEvents.contains(newEvent) {
+            self.socketConnection = nil
+            self.currentPayload = nil
+            self.isExpanded = false
+        }
+
         let ignoredVisualEvents = ["PreToolUse", "PostToolUse", "PostToolUseFailure"]
         if !ignoredVisualEvents.contains(payload.hookEventName ?? "") {
             self.currentPayload = payload
             self.statusText = payload.hookEventName ?? "Processing..."
         }
-        self.socketConnection = connection
+        if payload.hookEventName == "PermissionRequest" {
+            self.socketConnection = connection
+        }
         
         if let sid = payload.sessionID {
             self.sessionPayloads[sid] = payload
@@ -535,14 +549,29 @@ class SessionState {
             self.statusText = allow ? "Allowed" : "Denied"
         } catch {
             print("Failed to reply: \(error)")
+            self.isExpanded = false
+            self.currentPayload = nil
+            self.socketConnection = nil
+            self.statusText = "Connection closed"
         }
     }
     
     @MainActor
     func replyToQuestion(answer: String, question: String) {
         guard let connection = socketConnection else { return }
-        
-        // Wrap the payload dict with the structure Claude Code asks for.
+
+        // Build updatedInput that preserves the original questions array,
+        // because updatedInput REPLACES the entire tool input.
+        var updatedInput: [String: Any] = ["answers": [question: answer]]
+        if let payload = currentPayload,
+           let questions = payload.toolInput?.questions {
+            let encoder = JSONEncoder()
+            if let questionsData = try? encoder.encode(questions),
+               let questionsArray = try? JSONSerialization.jsonObject(with: questionsData) {
+                updatedInput["questions"] = questionsArray
+            }
+        }
+
         let rootNode: [String: Any] = [
             "continue": true,
             "suppressOutput": true,
@@ -550,9 +579,7 @@ class SessionState {
                 "hookEventName": "PermissionRequest",
                 "decision": [
                     "behavior": "allow",
-                    "updatedInput": [
-                        "answers": [question: answer]
-                    ]
+                    "updatedInput": updatedInput
                 ]
             ]
         ]
@@ -570,6 +597,10 @@ class SessionState {
             self.statusText = "Answer Submitted"
         } catch {
             print("Failed to reply: \(error)")
+            self.isExpanded = false
+            self.currentPayload = nil
+            self.socketConnection = nil
+            self.statusText = "Connection closed"
         }
     }
 }
